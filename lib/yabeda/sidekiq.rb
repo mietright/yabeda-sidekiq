@@ -15,48 +15,54 @@ module Yabeda
       30, 60, 120, 300, 1800, 3600, 21_600 # Sidekiq tasks may be very long-running
     ].freeze
 
+    DEFAULT_TAGS = {
+      application: ENV['APPLICATION_NAME'],
+      environment: ENV['RAILS_ENV']
+    }
+
     Yabeda.configure do
       group :sidekiq
 
-      counter :jobs_enqueued_total, tags: %i[queue worker], comment: "A counter of the total number of jobs sidekiq enqueued."
+      counter :jobs_enqueued_total, tags: %i[application environment queue worker], comment: "A counter of the total number of jobs sidekiq enqueued."
 
       next unless ::Sidekiq.server?
 
-      counter   :jobs_executed_total,  tags: %i[queue worker], comment: "A counter of the total number of jobs sidekiq executed."
-      counter   :jobs_success_total,   tags: %i[queue worker], comment: "A counter of the total number of jobs successfully processed by sidekiq."
-      counter   :jobs_failed_total,    tags: %i[queue worker], comment: "A counter of the total number of jobs failed in sidekiq."
+      counter   :jobs_executed_total,  tags: %i[application environment queue worker], comment: "A counter of the total number of jobs sidekiq executed."
+      counter   :jobs_success_total,   tags: %i[application environment queue worker], comment: "A counter of the total number of jobs successfully processed by sidekiq."
+      counter   :jobs_failed_total,    tags: %i[application environment queue worker], comment: "A counter of the total number of jobs failed in sidekiq."
 
-      gauge     :jobs_waiting_count,   tags: %i[queue], comment: "The number of jobs waiting to process in sidekiq."
-      gauge     :active_workers_count, tags: [],        comment: "The number of currently running machines with sidekiq workers."
-      gauge     :jobs_scheduled_count, tags: [],        comment: "The number of jobs scheduled for later execution."
-      gauge     :jobs_retry_count,     tags: [],        comment: "The number of failed jobs waiting to be retried"
-      gauge     :jobs_dead_count,      tags: [],        comment: "The number of jobs exceeded their retry count."
-      gauge     :active_processes,     tags: [],        comment: "The number of active Sidekiq worker processes."
-      gauge     :queue_latency,        tags: %i[queue], comment: "The queue latency, the difference in seconds since the oldest job in the queue was enqueued"
+      gauge     :jobs_waiting_count,   tags: %i[application environment queue], comment: "The number of jobs waiting to process in sidekiq."
+      gauge     :active_workers_count, tags: %i[application environment],        comment: "The number of currently running machines with sidekiq workers."
+      gauge     :jobs_scheduled_count, tags: %i[application environment],        comment: "The number of jobs scheduled for later execution."
+      gauge     :jobs_retry_count,     tags: %i[application environment],        comment: "The number of failed jobs waiting to be retried"
+      gauge     :jobs_dead_count,      tags: %i[application environment],        comment: "The number of jobs exceeded their retry count."
+      gauge     :active_processes,     tags: %i[application environment],        comment: "The number of active Sidekiq worker processes."
+      gauge     :queue_latency,        tags: %i[application environment queue], comment: "The queue latency, the difference in seconds since the oldest job in the queue was enqueued"
 
       histogram :job_latency, comment: "The job latency, the difference in seconds between enqueued and running time",
                               unit: :seconds, per: :job,
-                              tags: %i[queue worker],
+                              tags: %i[application environment queue worker],
                               buckets: LONG_RUNNING_JOB_RUNTIME_BUCKETS
       histogram :job_runtime, comment: "A histogram of the job execution time.",
                               unit: :seconds, per: :job,
-                              tags: %i[queue worker],
+                              tags: %i[application environment queue worker],
                               buckets: LONG_RUNNING_JOB_RUNTIME_BUCKETS
 
       collect do
         stats = ::Sidekiq::Stats.new
 
         stats.queues.each do |k, v|
-          sidekiq_jobs_waiting_count.set({ queue: k }, v)
+          sidekiq_jobs_waiting_count.set(DEFAULT_TAGS.merge(queue: k), v)
         end
-        sidekiq_active_workers_count.set({}, stats.workers_size)
-        sidekiq_jobs_scheduled_count.set({}, stats.scheduled_size)
-        sidekiq_jobs_dead_count.set({}, stats.dead_size)
-        sidekiq_active_processes.set({}, stats.processes_size)
-        sidekiq_jobs_retry_count.set({}, stats.retry_size)
+
+        sidekiq_active_workers_count.set(DEFAULT_TAGS, stats.workers_size)
+        sidekiq_jobs_scheduled_count.set(DEFAULT_TAGS, stats.scheduled_size)
+        sidekiq_jobs_dead_count.set(DEFAULT_TAGS, stats.dead_size)
+        sidekiq_active_processes.set(DEFAULT_TAGS, stats.processes_size)
+        sidekiq_jobs_retry_count.set(DEFAULT_TAGS, stats.retry_size)
 
         ::Sidekiq::Queue.all.each do |queue|
-          sidekiq_queue_latency.set({ queue: queue.name }, queue.latency)
+          sidekiq_queue_latency.set(DEFAULT_TAGS.merge(queue: queue.name), queue.latency)
         end
 
         # That is quite slow if your retry set is large
@@ -88,7 +94,7 @@ module Yabeda
 
     class << self
       def labelize(worker, job, queue)
-        { queue: queue, worker: worker_class(worker, job) }
+        DEFAULT_TAGS.merge(queue: queue, worker: worker_class(worker, job))
       end
 
       def worker_class(worker, job)
